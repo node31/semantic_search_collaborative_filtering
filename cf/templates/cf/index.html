@@ -1,0 +1,11 @@
+<h1>INSERT INDEX PAGE</h1>
+<form action = "{% url 'insert' %}" method = "POST">
+{% csrf_token %}
+CONTENT<input type = "text" name = "f_content" id = "f_content"/><br>
+<input type = "submit" value = "SUBMIT"/>
+</form>
+<a href = "{% url 'edit' %}">EDIT</a><br>
+<a href = "{% url 'perform_map_reduce' %}">PERFORM MAP REDUCE</a><br>
+<a href = "{% url 'test_page' %}">TEST PAGE</a><br>
+<a href = "{% url 'generate_term_document_matrix' %}">GENERATE TERM DOCUMENT MATRIX</a><br>
+<a href = "{% url 'search_page' %}">SEARCH</a>
