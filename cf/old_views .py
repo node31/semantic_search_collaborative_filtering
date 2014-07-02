@@ -10,8 +10,6 @@ from stemming.porter2 import stem
 import itertools
 import string
 
-import nltk
-
 collName = get_database().cf
 
 my_doc_requirement = u'storing_orignal_doc'
@@ -48,11 +46,10 @@ def edit_object(request):
 	connection.register([MyDocs])
 	connection.register([ToReduceDocs])
 	
+	obj_id = ObjectId(request.POST["f_id"])
 	
 	#z = collName.MyDocs.find_one({'content':y.content})
-	obj_id = ObjectId(request.POST["f_id"])
 	x = collName.MyDocs.find_one({"_id":obj_id,'required_for':my_doc_requirement})
-	
 	if x:	
 		x.content = request.POST["f_content"]
 		x.save()
@@ -65,19 +62,43 @@ def edit_object(request):
 		z.save()
 		
 	return render(request,'cf/thankYou.html',{})
-############################################################################################################################
+	
+def removeArticles(text):
+	words = text.split()
+	articles=['a', 'an', 'and', 'the', 'i', 'is', 'this', 'that', 'there', 'here', 'am', 'on', 'at', 'of','who','why','when','where','what','was','with','which','these','to','as']
+	for w in articles:
+		if w in words:
+			words.remove(w)	
+	return words
+	
+def remove_extra(s):
+	#Helper Function for:process_search
+	#Pre-condition:A string from which you want to remove unneccesary words
+	#Post-Condition:A list of words from without the extra words
+	
+	#This function works just fine
+	s_l = s.split()
+	remove_list = ['a', 'an', 'and', 'the', 'i', 'is', 'this', 'that', 'there', 'here', 'am', 'on', 'at', 'of','who','why','when','where','what','was','with','which','these','to','as','by','be','into','for','it','in','he','she','can','it','his','her','has']
+	
+	for i in remove_list:
+		for j in s_l:			
+			if i == j:
+				s_l.remove(j)
+	
+	return s_l
 
-############################################################################################################################	
+	
 def remove_punctuation(s):
 	translate_table = dict((ord(c),None) for c in string.punctuation)
 	return s.translate(translate_table)
-
-def mapper(input_value):
-	input_value = remove_punctuation(input_value)	
-	input_value_l = pre_process_for_map_reduce(input_value)
+	
+def mapper(input_value):	
+	input_value = remove_punctuation(input_value)		
+	input_value = input_value.lower()
+	input_value_l = remove_extra(input_value)
 	l = []
 	for i in input_value_l:
-		l.append([i,1])
+		l.append([stem(i),1])
 
 	return l
 	
@@ -119,69 +140,7 @@ def perform_map_reduce(request):
 		doc.delete()
 	
 	return render(request,'cf/thankYou.html',{})
-############################################################################################################################
-
-############################################################################################################################	
-
-def pre_process_for_map_reduce(text):
 	
-	grammar = r"""
-	    NBAR:
-		{<NN.*|JJ>*<NN.*>}  # Nouns and Adjectives, terminated with Nouns
-		
-	    NP:
-		{<NBAR>}
-		{<NBAR><IN><NBAR>}  # Above, connected with in/of/etc...
-	"""
-	chunker = nltk.RegexpParser(grammar)
-
-	#toks = nltk.regexp_tokenize(text, sentence_re)
-	toks = nltk.word_tokenize(text)
-	postoks = nltk.tag.pos_tag(toks)
-	tree = chunker.parse(postoks)	
-	
-	terms = get_terms(tree)
-
-	return terms
-	#for term in terms:
-	#	print term
-
-def leaves(tree):
-    """Finds NP (nounphrase) leaf nodes of a chunk tree."""
-    for subtree in tree.subtrees(filter = lambda t: t.node=='NP'):
-        yield subtree.leaves()
-
-def normalise(word):
-    """Normalises words to lowercase and stems and lemmatizes it."""
-    lemmatizer = nltk.WordNetLemmatizer()
-    stemmer = nltk.stem.porter.PorterStemmer()
-    word = word.lower()
-    word = stemmer.stem_word(word)
-    word = lemmatizer.lemmatize(word)
-    return word
-    
-from nltk.corpus import stopwords
-stopwords = stopwords.words('english')
-def acceptable_word(word):
-    """Checks conditions for acceptable word: length, stopword."""
-    
-    accepted = bool(2 <= len(word) <= 40
-        and word.lower() not in stopwords)
-    return accepted
-    
-def get_terms(tree):
-    result = []	
-    for leaf in leaves(tree):
-    	for w,t in leaf:
-    		if acceptable_word(w):
-    			term = normalise(w)
-    			result.append(term)        
-    return result
-
-
-	
-############################################################################################################################	
-
 def generate_term_document_matrix(request):
 	td_doc()
 	return render(request,'cf/thankYou.html',{})	
@@ -194,26 +153,20 @@ def get_nearby_words(request):
 	
 	search_text = request.POST['f_word']
 	search_text_l = search_text.split()
-	#print search_text_l
+	print search_text_l
 	word_set = set()
-	ranking_list = []
 	ranking_set = set()
 	
 	for i in search_text_l:
 		print i
-		score = topMatches(prefs,stem(i.lower()),n=30,similarity=sim_distance)
-		print "SCORE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n",score	
+		score = topMatches(prefs,i.lower(),n=100,similarity=sim_pearson)	
 		for _,word in score:
 			word_set.add(word)
-		print word_set
-		
-		
-		print "NOW I AM PRINTING RECOMMENDATIONS ____________________________________________________________________________"	
-		rankings = recommend(prefs,stem(i.lower()),similarity = sim_distance)
-		#seq = rankings[0:5]
-		#for j in seq:
-		#	ranking_set.add(j)
-		ranking_list.extend(rankings[0:5])
+			
+		rankings = recommend(prefs,i.lower(),similarity = sim_pearson)
+		seq = rankings[0:5]
+		for j in seq:
+			ranking_set.add(j)
 	
 	#score = topMatches(prefs,request.POST['f_word'],n=100,similarity=sim_pearson)
 	#print score
@@ -221,36 +174,9 @@ def get_nearby_words(request):
 	#for _,word in score:
 	#	word_list.append(word)
 	#print word_list
-	
-	
-	print "THE WORD SET IS PRINTED AS FOLLOWS -------------->>>>>>>>>>>>>\n",word_set	
-	print "THE RANKING SET IS PRINTED AS FOLLOWS ------------->>>>>>>>>>>>>>\n",ranking_set
-	print "THE RANKING LIST IS PRINTED AS FOLLOWS ------------->>>>>>>>>>>>>>\n",ranking_list
-	final_ranking_list = sort_n_avg(ranking_list)
-	final_ranking_list.sort()
-	final_ranking_list.reverse()
-	print "THE FINAL RANKING LIST IS PRINTED AS FOLLOWS ------------->>>>>>>>>>>>>>\n",final_ranking_list
+	print word_set	
+	print ranking_set
 	return render(request,'cf/show_search_results.html',{})
-	
-def sort_n_avg(l):
-	visited_list = []
-	final_ranking_list = []
-	
-	for (value,obj_id) in l:
-		if obj_id not in visited_list:
-			visited_list.append(obj_id)
-		
-			i = 0
-			req_sum = 0
-		
-			for (val,obj_id_added) in l:
-				if obj_id_added == obj_id:
-					i = i+1
-					req_sum += val			
-			if i!=0:
-				final_ranking_list.append((float(req_sum)/i,obj_id))
-			
-	return final_ranking_list
 	
 ###################################################################################################################################
 #The code till above was to perform map_reduce
@@ -306,68 +232,28 @@ def generate_big_dict():
 	for x in lodl:
 		if x.words:
 			prefs.update(x.words)		
-	print prefs
+	#print prefs
 	return prefs	
-	
-def sim_distance(prefs,d1,d2):
-	si = {}
-	for item in prefs[d1]:	#This item is a dictionary containing book id and rating of that book for a user
-		#print prefs[person1]
-		if item in prefs[d2]:
-			si[item] = 1
-			
-	if len(si) == 0:
-		return 0
-		
-	#We know add the squares of all the differences
-	sum_of_squares = 0
-	
-	for item in prefs[d1]:
-		#print prefs[person1]
-		if item in prefs[d2]:
-			#print prefs[person2]
-			#print "PERSON1 ITEM",item,prefs[d1][item]
-			#print "PERSON2 ITEM",item,prefs[d2][item]	
-			#print "SUBTRACT",prefs[d1][item] - prefs[d2][item]		
-			sum_of_squares += pow(prefs[d1][item] - prefs[d2][item],2)
-			#print sum_of_squares
-	
-	#print "SUM OF SQUARES :):)",sum_of_squares,(1.0/(1+sum_of_squares))
-	return (1.0/(1+sum_of_squares))	
-
 	
 
 
 def sim_pearson(prefs,d1,d2):
 	#Get the list of mutually rated items
 	si = {}
-	try:
-		#print "D1>>>>>>>>>>>>>>>>",d1,"D2>>>>>>>>>>>>>>>>>>",d2
-		for term in prefs[d1]:
-			#print "TERM >>>>> INSIDE THE FUNCTION SIM_PEARSON",term
-			if term in prefs[d2]: 
-				si[term] = 1
-	except KeyError:
-		#print "KEY ERROR HAS OCCURRED.THERE IS NO KEY AS:::",d1
-		return 0
+	for term in prefs[d1]:
+		if term in prefs[d2]: 
+			si[term] = 1
 
 	#if they are no rating in common, return 0
 	if len(si) == 0:
-		#print "THERE IS NOTHING IN COMMON AND HENCE RETURNING 0"
 		return 0
 
 	#sum calculations
 	n = len(si)
-	#print "THE VALUE OF N IS :::",n
-	
-	#for it in si:
-		#print "PRINTING IT INSIDE FUNCTION SIM-PEARSON>>>",it,"SI[it]>>>>>",si[it]
 
 	#sum of all preferences
 	sum1 = sum([prefs[d1][it] for it in si])
-	#print "SUM1>>>>>>",sum1
 	sum2 = sum([prefs[d2][it] for it in si])
-	#print "SUM2>>>>>>>",sum2
 
 	#Sum of the squares
 	sum1Sq = sum([pow(prefs[d1][it],2) for it in si])
@@ -375,20 +261,14 @@ def sim_pearson(prefs,d1,d2):
 
 	#Sum of the products
 	pSum = sum([prefs[d1][it] * prefs[d2][it] for it in si])
-	#print "PSUM>>>>>>>>>>>>>>>>>>>>>>>>>",pSum
 
 	#Calculate r (Pearson score)
 	num = pSum - (sum1 * sum2/n)
 	den = sqrt((sum1Sq - pow(sum1,2)/n) * (sum2Sq - pow(sum2,2)/n))
-	
-	#print "NUMERATOR >>>>>>>>>>>>>>>>>>>>>>>>>>",num,"DENOMINATOR>>>>>>>>>>>>>>>>>>>>",den
-	
 	if den == 0:
 		return 0
 
 	r = num/den
-	
-	#print "SIMILARITY >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",r
 
 	return r
 
@@ -408,47 +288,6 @@ def recommend(prefs,term,similarity = sim_pearson):
 			continue
 		else:
 			sim = similarity(prefs,term,other)
-			#print "similarity :):P>>>>>",sim,term,other
-			
-		if sim==0:
-			continue
-		
-		for single_ObjectId in prefs[other]:
-			if single_ObjectId in prefs[term]:
-				
-				if single_ObjectId not in each_item_total:
-					each_item_total[single_ObjectId] = 0
-				#print "% SIMILARITY :p:p",sim * prefs[other][single_ObjectId],"prefs[other][single_ObjectId]",prefs[other][single_ObjectId],"OTHER>>>>",other,"prefs[other]:",prefs[other]
-				each_item_total[single_ObjectId] += sim * prefs[other][single_ObjectId]
-			
-				if single_ObjectId not in similarity_total_for_each_item:
-					similarity_total_for_each_item[single_ObjectId] = 0
-				similarity_total_for_each_item[single_ObjectId] += sim
-		
-	
-	rankings = []
-	print "EACH ITEM TOTAL>>",each_item_total
-	print "SIMILARITY TOTAL FOR EACH ITEM :) :)",similarity_total_for_each_item
-	
-	for single_ObjectId,total_value in each_item_total.items():
-		rankings.append((total_value/similarity_total_for_each_item[single_ObjectId],single_ObjectId))
-	
-	rankings.sort()
-	rankings.reverse()
-	print "NOW PRINTING THE RANKINGS ------>\n\n",rankings
-	return rankings	
-	
-"""	
-def recommend(prefs,term,similarity = sim_pearson):
-	each_item_total = {}
-	similarity_total_for_each_item = {}
-	
-	for other in prefs:
-		if other == term:
-			continue
-		else:
-			sim = similarity(prefs,term,other)
-			print "similarity :):P>>>>>",sim,term,other
 			
 		if sim==0:
 			continue
@@ -464,8 +303,6 @@ def recommend(prefs,term,similarity = sim_pearson):
 		
 	
 	rankings = []
-	print "EACH ITEM TOTAL>>",each_item_total
-	print "SIMILARITY TOTAL FOR EACH ITEM :) :)",similarity_total_for_each_item
 	
 	for single_ObjectId,total_value in each_item_total.items():
 		rankings.append((total_value/similarity_total_for_each_item[single_ObjectId],single_ObjectId))
@@ -473,7 +310,7 @@ def recommend(prefs,term,similarity = sim_pearson):
 	rankings.sort()
 	rankings.reverse()
 	return rankings	
-"""	
+	
        
 def test_page(request):
 	prefs = generate_big_dict()	

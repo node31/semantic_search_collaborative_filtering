@@ -1,0 +1,9 @@
+#Using NLTK
+sudo pip install -U pyyaml nltk
+ipython #open the shell
+nltk.download()
+GUI OPENS
+NOW DOWNLOAD THE FOLLOWING
+1. MODELS ___ maxnet_treebank_pos_tag
+2. CORPORA ___ stopwords
+3. CORPORA ___ wordnet
