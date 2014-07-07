@@ -1,15 +1,10 @@
 from django.shortcuts import render
 from django.http import HttpResponse
-
-
 from cf.models import *
-
 from django_mongokit import connection,get_database
-from stemming.porter2 import stem
-
+#from stemming.porter2 import stem
 import itertools
 import string
-
 import nltk
 
 collName = get_database().cf
@@ -18,7 +13,6 @@ my_doc_requirement = u'storing_orignal_doc'
 reduced_doc_requirement = u'storing_reduced_doc'
 to_reduce_doc_requirement = u'storing_to_be_reduced_doc'
 indexed_word_list_requirement = u'storing_indexed_words'
-id_gen_number = 10000
 
 def index(request):
 	#return HttpResponse("You are at index page")
@@ -48,33 +42,95 @@ def edit_object(request):
 	connection.register([MyDocs])
 	connection.register([ToReduceDocs])
 	
-	
-	#z = collName.MyDocs.find_one({'content':y.content})
 	obj_id = ObjectId(request.POST["f_id"])
 	x = collName.MyDocs.find_one({"_id":obj_id,'required_for':my_doc_requirement})
 	
 	if x:	
 		x.content = request.POST["f_content"]
-		x.save()
-	
+		x.save()	
 	y = collName.ToReduceDocs.find_one({'doc_id':obj_id,'required_for':to_reduce_doc_requirement})
 	if not y:
 		z = collName.ToReduceDocs()
 		z.doc_id = obj_id
 		z.required_for = to_reduce_doc_requirement
-		z.save()
-		
+		z.save()		
 	return render(request,'cf/thankYou.html',{})
+	
 ############################################################################################################################
 
+################################### PRE PROCESSING FOR MAP REDUCE #################################################################	
+
+def pre_process_for_map_reduce(text):
+	
+	grammar = r"""
+	    NBAR:
+		{<NN.*|JJ>*<NN.*>}  # Nouns and Adjectives, terminated with Nouns
+		
+	    NP:
+		{<NBAR>}
+		{<NBAR><IN><NBAR>}  # Above, connected with in/of/etc...
+	"""
+	chunker = nltk.RegexpParser(grammar)	#This is the chunker for nltk.It chunks values accordingly	
+	toks = nltk.word_tokenize(text)		#This shall tokenize the words
+	postoks = nltk.tag.pos_tag(toks)	#This shall perform tagging of words with their respective parts of speech
+	tree = chunker.parse(postoks)	#It makes a tree of the tags and the words which are associated with that particular tag
+	
+	terms = get_terms(tree) 
+	return terms
+
+
+def leaves(tree):
+    """Finds NP (nounphrase) leaf nodes of a chunk tree."""
+    for subtree in tree.subtrees(filter = lambda t: t.node=='NP'):
+        yield subtree.leaves()
+
+def normalise(word):
+    """Normalises words to lowercase and stems and lemmatizes it.
+       Lemmatization and stemming of the words both are necessary in order to make sure that the words are properly indexed	
+    """
+    
+    lemmatizer = nltk.WordNetLemmatizer()
+    stemmer = nltk.stem.porter.PorterStemmer()
+    word = word.lower() 	#THE WORD IS CONVERTED INTO LOWER CASE IN THIS STEP
+    word = stemmer.stem_word(word)
+    word = lemmatizer.lemmatize(word)
+    
+    return word
+    
+from nltk.corpus import stopwords
+stopwords = stopwords.words('english')
+def acceptable_word(word):
+    """Checks conditions for acceptable word: length, stopword.
+       A word is acceptable if 
+       		1. It is not a stopword
+       		2. The length of the word is less than 40 characters
+       		This is because, there is no point in storing a word more than 40chars long.This is because, user is not expected to 
+       		type words which are 40 chars long   
+    """
+    max_word_length = 40
+    accepted = bool(2 <= len(word) <= max_word_length and word.lower() not in stopwords)
+    return accepted
+    
+def get_terms(tree):
+    result = []	
+    for leaf in leaves(tree):
+    	for w,t in leaf:
+    		if acceptable_word(w):
+    			term = normalise(w)
+    			result.append(term)        
+    return result
 ############################################################################################################################	
+
+######################################PRE PROCESSING FOR MAP REDUCE ########################################################	
 def remove_punctuation(s):
 	translate_table = dict((ord(c),None) for c in string.punctuation)
 	return s.translate(translate_table)
 
 def mapper(input_value):
 	input_value = remove_punctuation(input_value)	
-	input_value_l = pre_process_for_map_reduce(input_value)
+	input_value_l = pre_process_for_map_reduce(input_value)		#This performs pre_processing for map reduce
+	#This pre_processing is very important in order to save space
+	#This pre_processing function makes the map_reduce function slow
 	l = []
 	for i in input_value_l:
 		l.append([i,1])
@@ -116,143 +172,11 @@ def perform_map_reduce(request):
 			new_doc.required_for = reduced_doc_requirement
 			new_doc.is_indexed = False
 			new_doc.save()
-		doc.delete()
-	
+		doc.delete()	
 	return render(request,'cf/thankYou.html',{})
 ############################################################################################################################
 
-############################################################################################################################	
-
-def pre_process_for_map_reduce(text):
-	
-	grammar = r"""
-	    NBAR:
-		{<NN.*|JJ>*<NN.*>}  # Nouns and Adjectives, terminated with Nouns
-		
-	    NP:
-		{<NBAR>}
-		{<NBAR><IN><NBAR>}  # Above, connected with in/of/etc...
-	"""
-	chunker = nltk.RegexpParser(grammar)
-
-	#toks = nltk.regexp_tokenize(text, sentence_re)
-	toks = nltk.word_tokenize(text)
-	postoks = nltk.tag.pos_tag(toks)
-	tree = chunker.parse(postoks)	
-	
-	terms = get_terms(tree)
-
-	return terms
-	#for term in terms:
-	#	print term
-
-def leaves(tree):
-    """Finds NP (nounphrase) leaf nodes of a chunk tree."""
-    for subtree in tree.subtrees(filter = lambda t: t.node=='NP'):
-        yield subtree.leaves()
-
-def normalise(word):
-    """Normalises words to lowercase and stems and lemmatizes it."""
-    lemmatizer = nltk.WordNetLemmatizer()
-    stemmer = nltk.stem.porter.PorterStemmer()
-    word = word.lower()
-    word = stemmer.stem_word(word)
-    word = lemmatizer.lemmatize(word)
-    return word
-    
-from nltk.corpus import stopwords
-stopwords = stopwords.words('english')
-def acceptable_word(word):
-    """Checks conditions for acceptable word: length, stopword."""
-    
-    accepted = bool(2 <= len(word) <= 40
-        and word.lower() not in stopwords)
-    return accepted
-    
-def get_terms(tree):
-    result = []	
-    for leaf in leaves(tree):
-    	for w,t in leaf:
-    		if acceptable_word(w):
-    			term = normalise(w)
-    			result.append(term)        
-    return result
-
-
-	
-############################################################################################################################	
-
-def generate_term_document_matrix(request):
-	td_doc()
-	return render(request,'cf/thankYou.html',{})	
-	
-def search_page(request):
-	return render(request,'cf/search_home.html',{})
-
-def get_nearby_words(request):
-	prefs = generate_big_dict()
-	
-	search_text = request.POST['f_word']
-	search_text_l = search_text.split()
-	#print search_text_l
-	word_set = set()
-	ranking_list = []
-	ranking_set = set()
-	
-	for i in search_text_l:
-		print i
-		score = topMatches(prefs,stem(i.lower()),n=30,similarity=sim_distance)
-		print "SCORE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n",score	
-		for _,word in score:
-			word_set.add(word)
-		print word_set
-		
-		
-		print "NOW I AM PRINTING RECOMMENDATIONS ____________________________________________________________________________"	
-		rankings = recommend(prefs,stem(i.lower()),similarity = sim_distance)
-		#seq = rankings[0:5]
-		#for j in seq:
-		#	ranking_set.add(j)
-		ranking_list.extend(rankings[0:5])
-	
-	#score = topMatches(prefs,request.POST['f_word'],n=100,similarity=sim_pearson)
-	#print score
-	#word_list = []
-	#for _,word in score:
-	#	word_list.append(word)
-	#print word_list
-	
-	
-	print "THE WORD SET IS PRINTED AS FOLLOWS -------------->>>>>>>>>>>>>\n",word_set	
-	print "THE RANKING SET IS PRINTED AS FOLLOWS ------------->>>>>>>>>>>>>>\n",ranking_set
-	print "THE RANKING LIST IS PRINTED AS FOLLOWS ------------->>>>>>>>>>>>>>\n",ranking_list
-	final_ranking_list = sort_n_avg(ranking_list)
-	final_ranking_list.sort()
-	final_ranking_list.reverse()
-	print "THE FINAL RANKING LIST IS PRINTED AS FOLLOWS ------------->>>>>>>>>>>>>>\n",final_ranking_list
-	return render(request,'cf/show_search_results.html',{})
-	
-def sort_n_avg(l):
-	visited_list = []
-	final_ranking_list = []
-	
-	for (value,obj_id) in l:
-		if obj_id not in visited_list:
-			visited_list.append(obj_id)
-		
-			i = 0
-			req_sum = 0
-		
-			for (val,obj_id_added) in l:
-				if obj_id_added == obj_id:
-					i = i+1
-					req_sum += val			
-			if i!=0:
-				final_ranking_list.append((float(req_sum)/i,obj_id))
-			
-	return final_ranking_list
-	
-###################################################################################################################################
+################################################## POST PROCESSING FOR MAP REDUCE ############################################
 #The code till above was to perform map_reduce
 #The code below this will try and perform semantic search
 import scipy.sparse
@@ -260,32 +184,46 @@ import numpy
 import sparsesvd
 from math import sqrt
 
-#{'word':{'ObjectId':number_of_occurances,'ObjectId':number_of_occurances}}
+
 def td_doc():
+	"""
+	#{'word':{'ObjectId':number_of_occurances,'ObjectId':number_of_occurances}}
+	This is the kind of dictionary which is required and will be created on the fly
+	Since we have already stored the map reduced documents, this function will be pretty fast.
+	The only thing which shall take time in our code is the MapReduce function	
+	"""
+	
 	connection.register([IndexedWordList])
 	connection.register([ReducedDocs])
+	
+	#This is the list of documents which contains the indexed words
+	
 	lod = collName.IndexedWordList.find({'required_for':indexed_word_list_requirement})	#list_of_documents_cursor
+	
+	"""
+		What does indexing mean?
+		In our scenario,indexing simply means to store the number if occurances of a particular word in each and every document.
+		
+	"""
 	mrd = collName.ReducedDocs.find({'required_for':reduced_doc_requirement})	#map_reduced_documents
 	mrdl = list(mrd)
-	#print "LENGTH OF MAP REDUCED DOCUMENT LIST >>>",len(mrdl)
+	
 		
 	for pwdl in lod:	
 		#particulat_word_list
 		start_int = int(pwdl.word_start_id)
-		start_char = str(unichr(96+start_int))
-		wod = pwdl.words	#word_object_dictionary
-		#print "START CHAR---->",start_char
-		#print "WORD OBJECT DICTIONARY BEFORE  ---->",wod	
+		start_char = str(unichr(96+start_int)) 	#This tells what is the starting character of the word
+		wod = pwdl.words	#word_object_dictionary		
 		
 		for pmrd in mrdl:
 			#particular_map_reduced_document
 			#print pmrd
 			if not pmrd.is_indexed:
 				wd = pmrd.content
-				#print "WORD CONTENT OF ",pmrd._id,"\n",wd
+				
 				for i in wd:
 					if i.startswith(start_char):
-						#print i
+						
 						if i not in wod:
 							wod[i] = {}
 						wod[i][str(pmrd.orignal_id)]=wd[i]
@@ -300,16 +238,24 @@ def td_doc():
 def generate_big_dict():
 	#This function will generate a big dictionary i.e. it will simply go and combine all the dictionaries together
 	connection.register([IndexedWordList])
+	
 	lod = collName.IndexedWordList.find({'required_for':indexed_word_list_requirement})
 	lodl = list(lod)
-	prefs = {}
+	
+	prefs = {} #prefs ==> Preferences
+	
 	for x in lodl:
 		if x.words:
 			prefs.update(x.words)		
-	print prefs
+	#print prefs
 	return prefs	
 	
+####
+#There are two kinds of similarity functions which we have defined and on whose basis recommendations are given
+#If logic for semantic search needs to be changed then the only thing which is to be changed is this similarity function
+####
 def sim_distance(prefs,d1,d2):
+	#This fucntion simply finds the distance between two words. It works very well
 	si = {}
 	for item in prefs[d1]:	#This item is a dictionary containing book id and rating of that book for a user
 		#print prefs[person1]
@@ -339,35 +285,24 @@ def sim_distance(prefs,d1,d2):
 
 
 def sim_pearson(prefs,d1,d2):
+	#Theoretically --- The results of pearson similarity should be better, but practically the results are much worse
 	#Get the list of mutually rated items
 	si = {}
-	try:
-		#print "D1>>>>>>>>>>>>>>>>",d1,"D2>>>>>>>>>>>>>>>>>>",d2
-		for term in prefs[d1]:
-			#print "TERM >>>>> INSIDE THE FUNCTION SIM_PEARSON",term
+	try:	
+		for term in prefs[d1]:			
 			if term in prefs[d2]: 
 				si[term] = 1
-	except KeyError:
-		#print "KEY ERROR HAS OCCURRED.THERE IS NO KEY AS:::",d1
+	except KeyError:	
 		return 0
-
-	#if they are no rating in common, return 0
-	if len(si) == 0:
-		#print "THERE IS NOTHING IN COMMON AND HENCE RETURNING 0"
-		return 0
-
+	
 	#sum calculations
 	n = len(si)
-	#print "THE VALUE OF N IS :::",n
 	
-	#for it in si:
-		#print "PRINTING IT INSIDE FUNCTION SIM-PEARSON>>>",it,"SI[it]>>>>>",si[it]
-
 	#sum of all preferences
 	sum1 = sum([prefs[d1][it] for it in si])
-	#print "SUM1>>>>>>",sum1
+	
 	sum2 = sum([prefs[d2][it] for it in si])
-	#print "SUM2>>>>>>>",sum2
+	
 
 	#Sum of the squares
 	sum1Sq = sum([pow(prefs[d1][it],2) for it in si])
@@ -375,31 +310,28 @@ def sim_pearson(prefs,d1,d2):
 
 	#Sum of the products
 	pSum = sum([prefs[d1][it] * prefs[d2][it] for it in si])
-	#print "PSUM>>>>>>>>>>>>>>>>>>>>>>>>>",pSum
+	
 
-	#Calculate r (Pearson score)
+	
 	num = pSum - (sum1 * sum2/n)
 	den = sqrt((sum1Sq - pow(sum1,2)/n) * (sum2Sq - pow(sum2,2)/n))
-	
-	#print "NUMERATOR >>>>>>>>>>>>>>>>>>>>>>>>>>",num,"DENOMINATOR>>>>>>>>>>>>>>>>>>>>",den
 	
 	if den == 0:
 		return 0
 
 	r = num/den
-	
-	#print "SIMILARITY >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",r
-
+		
 	return r
 
-def topMatches(prefs,document,n=5,similarity=sim_pearson):
-	scores = [(similarity(prefs,document,other),other)
-				for other in prefs if other != document]
+def topMatches(prefs,document,n=5,similarity=sim_distance):
+	#This function returns the words which are closest to the word which are given to this function
+	scores = [(similarity(prefs,document,other),other) for other in prefs if other != document]
 	scores.sort()
 	scores.reverse()
 	return scores[0:n]
 	
-def recommend(prefs,term,similarity = sim_pearson):
+def recommend(prefs,term,similarity = sim_distance):
+	#This function returns the documents which will be closer to the given document
 	each_item_total = {}
 	similarity_total_for_each_item = {}
 	
@@ -414,11 +346,9 @@ def recommend(prefs,term,similarity = sim_pearson):
 			continue
 		
 		for single_ObjectId in prefs[other]:
-			if single_ObjectId in prefs[term]:
-				
+			if single_ObjectId in prefs[term]:				
 				if single_ObjectId not in each_item_total:
-					each_item_total[single_ObjectId] = 0
-				#print "% SIMILARITY :p:p",sim * prefs[other][single_ObjectId],"prefs[other][single_ObjectId]",prefs[other][single_ObjectId],"OTHER>>>>",other,"prefs[other]:",prefs[other]
+					each_item_total[single_ObjectId] = 0				
 				each_item_total[single_ObjectId] += sim * prefs[other][single_ObjectId]
 			
 				if single_ObjectId not in similarity_total_for_each_item:
@@ -427,57 +357,86 @@ def recommend(prefs,term,similarity = sim_pearson):
 		
 	
 	rankings = []
-	print "EACH ITEM TOTAL>>",each_item_total
-	print "SIMILARITY TOTAL FOR EACH ITEM :) :)",similarity_total_for_each_item
 	
 	for single_ObjectId,total_value in each_item_total.items():
 		rankings.append((total_value/similarity_total_for_each_item[single_ObjectId],single_ObjectId))
 	
 	rankings.sort()
 	rankings.reverse()
-	print "NOW PRINTING THE RANKINGS ------>\n\n",rankings
+	
 	return rankings	
-	
-"""	
-def recommend(prefs,term,similarity = sim_pearson):
-	each_item_total = {}
-	similarity_total_for_each_item = {}
-	
-	for other in prefs:
-		if other == term:
-			continue
-		else:
-			sim = similarity(prefs,term,other)
-			print "similarity :):P>>>>>",sim,term,other
-			
-		if sim==0:
-			continue
-		
-		for single_ObjectId in prefs[other]:
-			if single_ObjectId not in prefs[term] or prefs[term][single_ObjectId] == 0:
-				
-				each_item_total.setdefault(single_ObjectId,0)
-				each_item_total[single_ObjectId] += sim * prefs[other][single_ObjectId]
-				
-				similarity_total_for_each_item.setdefault(single_ObjectId,0)
-				similarity_total_for_each_item[single_ObjectId] += sim
-		
-	
-	rankings = []
-	print "EACH ITEM TOTAL>>",each_item_total
-	print "SIMILARITY TOTAL FOR EACH ITEM :) :)",similarity_total_for_each_item
-	
-	for single_ObjectId,total_value in each_item_total.items():
-		rankings.append((total_value/similarity_total_for_each_item[single_ObjectId],single_ObjectId))
-	
-	rankings.sort()
-	rankings.reverse()
-	return rankings	
-"""	
-       
-def test_page(request):
-	prefs = generate_big_dict()	
-	return render(request,"cf/test.html",{})
-	
+################## FUNCTIONS FOR CALLING/TESTING SEMANTIC SEARCH ########################################
 
-# Create your views here.
+def generate_term_document_matrix(request):
+	td_doc()
+	return render(request,'cf/thankYou.html',{})	
+	
+def search_page(request):
+	return render(request,'cf/search_home.html',{})
+
+def get_nearby_words(request):
+	prefs = generate_big_dict()
+	
+	search_text = request.POST['f_word']
+	search_text_l = search_text.split()
+	#print search_text_l
+	word_set = set()
+	ranking_list = []
+	
+	stemmer = nltk.stem.porter.PorterStemmer()
+		
+	for i in search_text_l:
+		print i
+		score = topMatches(prefs,stemmer.stem_word(i.lower()),n=30,similarity=sim_distance)
+		#print "SCORE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n",score	
+		for _,word in score:
+			word_set.add(word)
+		#print word_set
+		
+		
+		#print "NOW I AM PRINTING RECOMMENDATIONS ____________________________________________________________________________"	
+		rankings = recommend(prefs,stemmer.stem_word(i.lower()),similarity = sim_distance)
+		ranking_list.extend(rankings[0:5])
+	
+	
+	
+	#print "THE WORD SET IS PRINTED AS FOLLOWS -------------->>>>>>>>>>>>>\n",word_set	
+	
+	#print "THE RANKING LIST IS PRINTED AS FOLLOWS ------------->>>>>>>>>>>>>>\n",ranking_list
+	
+	final_ranking_list = sort_n_avg(ranking_list)
+	final_ranking_list.sort()
+	final_ranking_list.reverse()
+	
+	print "THE FINAL RANKING LIST IS PRINTED AS FOLLOWS ------------->>>>>>>>>>>>>>\n",final_ranking_list
+	return render(request,'cf/show_search_results.html',{})
+	
+def sort_n_avg(l):
+	"""
+		Helper Function for: get_nearby_words()
+		Parameters: List containing documents and their ratings
+		Return Value:List in which the ratings of the documents have been averaged out
+		
+		INPUT:l = [(2,'alpha'),(3,'beta'),(1,'alpha'),(4,'alpha'),(5,'gamma'),(1,'alpha'),(2,'beta'),(3,'alpha')]
+		OUTPUT:[(2.2, 'alpha'), (2.5, 'beta'), (5.0, 'gamma')]
+		
+	"""
+	visited_list = []
+	final_ranking_list = []
+	
+	for (value,obj_id) in l:
+		if obj_id not in visited_list:
+			visited_list.append(obj_id)
+		
+			i = 0
+			req_sum = 0
+		
+			for (val,obj_id_added) in l:
+				if obj_id_added == obj_id:
+					i = i+1
+					req_sum += val			
+			if i!=0:
+				final_ranking_list.append((float(req_sum)/i,obj_id))
+			
+	return final_ranking_list
+#################################################################################################################	

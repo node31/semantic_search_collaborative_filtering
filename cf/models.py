@@ -17,10 +17,10 @@ connection.register([MyDocs])
 
 class ReducedDocs(DjangoDocument):
 	structure={
-		'content':dict,
+		'content':dict, #This contains the content in the dictionary format
 		'orignal_id':ObjectId,
 		'required_for':unicode,
-		'is_indexed':bool
+		'is_indexed':bool, #This will be true if the map reduced document has been indexed.If it is not then it will be false
 	}
 	use_dot_notation = True
 
