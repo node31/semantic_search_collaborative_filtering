@@ -1,7 +1,0 @@
-<h1>SEARCH HOME</h1>
-<form action = "{% url 'get_nearby_words' %}" method = "POST">
-{% csrf_token %}
-<input type = "text" name = "f_word" id = "f_word"><br>
-<input type = "submit" value = "SEARCH">
-
-</form>

@@ -1,8 +1,0 @@
-<h1>EDIT PAGE</h1>
-<form action = "{% url 'insert' %}" method = "POST">
-{% csrf_token %}
-ID:<input type = "text" name = "f_id" id = "f_id"/><br>
-CONTENT<input type = "text" name = "f_content" id = "f_content"/><br>
-<input type = "submit" value = "SUBMIT"/>
-</form>
-
